@@ -189,8 +189,8 @@ class DebugCtrlBundle (nComponents: Int)(implicit val p: Parameters) extends Par
   *  Debug ROM. It runs partially off of the dmiClk (e.g. TCK) and
   *  the TL clock. Therefore, it is divided into "Outer" portion (running
   *  of off dmiClock and dmiReset) and "Inner" (running off tlClock and tlReset).
-  *  This allows DMCONTROL.haltreq, hartsel, hasel, dmactive, and ndreset to be
-  *  modified even while the Core is in reset or not being clocked. 
+  *  This allows DMCONTROL.haltreq, hartsel, hasel, hawindowsel, hawindow, dmactive,
+  *  and ndreset to be modified even while the Core is in reset or not being clocked. 
   *  Not all reads from the Debugger to the Debug Module will actually complete
   *  in these scenarios either, they will just block until tlClock and tlReset
   *  allow them to complete. This is not strictly necessary for 
@@ -303,6 +303,7 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
     //  HAWINDOWSEL selects a 32-bit slice of HAMASK to be visible for read/write in HAWINDOW
     //--------------------------------------------------------------
     val hamask = Wire(init = Vec.fill(nComponents){false.B})
+    def haWindowSize = 32
 
       // The following need to be declared even if supportHartArray is false due to reference
       // at compile time by dmiNode.regmap
@@ -324,17 +325,17 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
       val HAWINDOWSELReg = Wire(init = new HAWINDOWSELFields().fromBits(AsyncResetReg(updateData = HAWINDOWSELNxt.asUInt,
         resetData = 0,
         enable = true.B,
-        name = "HAWINDOWSEL"
+        name = "HAWINDOWSELReg"
       )))
 
       HAWINDOWSELRdData := Wire(init = HAWINDOWSELReg)
       HAWINDOWSELNxt := HAWINDOWSELReg
-      when (~dmactive | ~supportHartArray.B) {
+      when (~dmactive) {
         HAWINDOWSELNxt := HAWINDOWSELReset
       } .otherwise {
         when (HAWINDOWSELWrEn) {
-            // Unneeded upper bits of HAWINDOWSEL are tied to 0.  Entire register is 0 if 32 or fewer harts.
-          if (nComponents > 32) {
+            // Unneeded upper bits of HAWINDOWSEL are tied to 0.  Entire register is 0 if all harts fit in one window
+          if (nComponents > haWindowSize) {
             HAWINDOWSELNxt.hawindowsel := HAWINDOWSELWrData.hawindowsel & (log2Up(nComponents) - 5).U
           } else {
             HAWINDOWSELNxt.hawindowsel := 0.U
@@ -342,20 +343,20 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
         }
       }
 
-      val numHAMASKSlices = ((nComponents - 1)/32)+1
+      val numHAMASKSlices = ((nComponents - 1)/haWindowSize)+1
       HAWINDOWRdData.maskdata := 0.U     // default, overridden below
       for (ii <- 0 until numHAMASKSlices) {
-        val SliceMask = if (nComponents > ii*32 + 31) 0xFFFFFFFF  // All harts in this slice exist
-                        else (1<<(nComponents - ii*32)) - 1       // Partial last slice
+        val sliceMask = if (nComponents > ((ii*haWindowSize) + haWindowSize-1)) 0xFFFFFFFF  // All harts in this slice exist
+                        else (1<<(nComponents - (ii*haWindowSize))) - 1         // Partial last slice
         val HAMASKRst = Wire(init = (new HAWINDOWFields().fromBits(0.U)))
         val HAMASKNxt = Wire(init = (new HAWINDOWFields().fromBits(0.U)))
         val HAMASKReg = Wire(init = Vec(AsyncResetReg(updateData = HAMASKNxt.asUInt,
           resetData = 0,
           enable = true.B,
-          name = "HAMASK")))
+          name = s"HAMASKReg${ii}")))
 
         when (ii.U === HAWINDOWSELReg.hawindowsel) {
-          HAWINDOWRdData.maskdata := HAMASKReg.asUInt & SliceMask.U
+          HAWINDOWRdData.maskdata := HAMASKReg.asUInt & sliceMask.U
         }
 
         HAMASKNxt.maskdata := HAMASKReg.asUInt
@@ -368,9 +369,9 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
         }
 
          // drive each slice of hamask with HAMASKReg or with new value being written
-        for (jj <- 0 until 32) {
-          if (ii*32 + jj < nComponents) {
-            hamask(ii*32 + jj) := Mux(HAWINDOWWrEn && (ii.U === HAWINDOWSELReg.hawindowsel),
+        for (jj <- 0 until haWindowSize) {
+          if (((ii*haWindowSize) + jj) < nComponents) {
+            hamask((ii*haWindowSize) + jj) := Mux(HAWINDOWWrEn && (ii.U === HAWINDOWSELReg.hawindowsel),
                                       (HAWINDOWWrData.maskdata >> jj) & 1.U,
                                       (HAMASKReg.asUInt >> jj) & 1.U)
           }
