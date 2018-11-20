@@ -368,12 +368,12 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
           }
         }
 
-         // drive each slice of hamask with HAMASKReg or with new value being written
+         // drive each slice of hamask with stored HAMASKReg or with new value being written
         for (jj <- 0 until haWindowSize) {
           if (((ii*haWindowSize) + jj) < nComponents) {
-            hamask((ii*haWindowSize) + jj) := Mux(HAWINDOWWrEn && (ii.U === HAWINDOWSELReg.hawindowsel),
-                                      (HAWINDOWWrData.maskdata >> jj) & 1.U,
-                                      (HAMASKReg.asUInt >> jj) & 1.U)
+            val tempWrData = HAWINDOWWrData.maskdata.toBools
+            val tempMaskReg = HAMASKReg.asUInt.toBools
+            hamask((ii*haWindowSize) + jj) := Mux(HAWINDOWWrEn && (ii.U === HAWINDOWSELReg.hawindowsel), tempWrData(jj), tempMaskReg(jj))
           }
         }
       }
