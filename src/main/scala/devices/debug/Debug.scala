@@ -288,7 +288,7 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
         DMCONTROLNxt.haltreq      := DMCONTROLWrData.haltreq
         DMCONTROLNxt.resumereq    := DMCONTROLWrData.resumereq
         DMCONTROLNxt.ackhavereset := DMCONTROLWrData.ackhavereset
-        DMCONTROLNxt.hasel        := supportHartArray.B & DMCONTROLWrData.hasel
+        DMCONTROLNxt.hasel        := (if (supportHartArray) DMCONTROLWrData.hasel else false.B)
       }
     }
 
@@ -387,21 +387,14 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
     def DMI_HAWINDOWSEL_OFFSET = ((DMI_HAWINDOWSEL - DMI_DMCONTROL) << 2)
     def DMI_HAWINDOW_OFFSET    = ((DMI_HAWINDOW - DMI_DMCONTROL) << 2)
 
-    if (supportHartArray) {
-      dmiNode.regmap(
-        DMI_DMCONTROL_OFFSET   -> Seq(RWNotify(32, DMCONTROLRdData.asUInt(),
-          DMCONTROLWrDataVal, DMCONTROLRdEn, DMCONTROLWrEn, Some(RegFieldDesc("dmi_dmcontrol", "", reset=Some(0))))),
-        DMI_HAWINDOWSEL_OFFSET -> Seq(RWNotify(32, HAWINDOWSELRdData.asUInt(),
-          HAWINDOWSELWrDataVal, HAWINDOWSELRdEn, HAWINDOWSELWrEn, Some(RegFieldDesc("dmi_hawindowsel", "", reset=Some(0))))),
-        DMI_HAWINDOW_OFFSET    -> Seq(RWNotify(32, HAWINDOWRdData.asUInt(),
-          HAWINDOWWrDataVal, HAWINDOWRdEn, HAWINDOWWrEn, Some(RegFieldDesc("dmi_hawindow", "", reset=Some(0)))))
-      )
-    } else {
-      dmiNode.regmap(
-        DMI_DMCONTROL_OFFSET   -> Seq(RWNotify(32, DMCONTROLRdData.asUInt(),
-          DMCONTROLWrDataVal, DMCONTROLRdEn, DMCONTROLWrEn, Some(RegFieldDesc("dmi_dmcontrol", "", reset=Some(0))))),
-      )
-    }
+    dmiNode.regmap(
+      DMI_DMCONTROL_OFFSET   -> Seq(RWNotify(32, DMCONTROLRdData.asUInt(),
+        DMCONTROLWrDataVal, DMCONTROLRdEn, DMCONTROLWrEn, Some(RegFieldDesc("dmi_dmcontrol", "", reset=Some(0))))),
+      DMI_HAWINDOWSEL_OFFSET -> (if (supportHartArray) Seq(RWNotify(32, HAWINDOWSELRdData.asUInt(),
+        HAWINDOWSELWrDataVal, HAWINDOWSELRdEn, HAWINDOWSELWrEn, Some(RegFieldDesc("dmi_hawindowsel", "", reset=Some(0))))) else Nil),
+      DMI_HAWINDOW_OFFSET    -> (if (supportHartArray) Seq(RWNotify(32, HAWINDOWRdData.asUInt(),
+        HAWINDOWWrDataVal, HAWINDOWRdEn, HAWINDOWWrEn, Some(RegFieldDesc("dmi_hawindow", "", reset=Some(0))))) else Nil)
+    )
 
     //--------------------------------------------------------------
     // Interrupt Registers
@@ -577,14 +570,14 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
 
     val selectedHartReg = RegInit(0.U(10.W))
       // hamaskFull is a vector of all selected harts including hartsel, whether or not supportHartArray is true
-    val hamaskFull = Vec.fill(nComponents){false.B}
+    val hamaskFull = Wire(init = Vec.fill(nComponents){false.B})
 
     when (io.innerCtrl.fire()){
       selectedHartReg := io.innerCtrl.bits.hartsel
     }
 
     if (supportHartArray) {
-      val hamaskZero = Vec.fill(nComponents){false.B}
+      val hamaskZero = Wire(init = Vec.fill(nComponents){false.B})
       val hamaskReg = RegInit(Vec.fill(nComponents){false.B})
       when (io.innerCtrl.fire()){
         hamaskReg := Mux(io.innerCtrl.bits.hasel, io.innerCtrl.bits.hamask, hamaskZero)
@@ -597,6 +590,14 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
     }
 
     io.innerCtrl.ready := true.B
+
+     // Construct a Vec from io.innerCtrl fields indicating whether each hart is being selected in this write
+     // A hart may be selected by hartsel field or by hart array
+    val hamaskWrSel = Wire(init = Vec.fill(nComponents){false.B})
+    for (component <- 0 until nComponents ) {
+      hamaskWrSel(component) := ((io.innerCtrl.bits.hartsel === component.U) ||
+        (if (supportHartArray) io.innerCtrl.bits.hasel && io.innerCtrl.bits.hamask(component) else false.B))
+    }
 
     //--------------------------------------------------------------
     // DMI Registers
@@ -611,7 +612,8 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
     val resumereq = io.innerCtrl.fire() && io.innerCtrl.bits.resumereq
 
     DMSTATUSRdData.anynonexistent := (selectedHartReg >= nComponents.U)   // only hartsel can be nonexistent
-    DMSTATUSRdData.allnonexistent := (selectedHartReg >= nComponents.U) & ~hamaskFull.reduce(_ | _)
+       // all harts nonexistent if hartsel is out of range and there are no harts selected in the hart array
+    DMSTATUSRdData.allnonexistent := (selectedHartReg >= nComponents.U) & (~hamaskFull.reduce(_ | _))
 
     when (~DMSTATUSRdData.allnonexistent) {  // if no existent harts selected, all other status is false
       DMSTATUSRdData.anyunavail   := (io.debugUnavail &  hamaskFull).reduce(_ | _)
@@ -629,8 +631,7 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
     }
 
     for (component <- 0 until nComponents ) {
-      when (io.innerCtrl.fire() && io.innerCtrl.bits.ackhavereset &&
-           ((io.innerCtrl.bits.hartsel === component.U) || (supportHartArray.B && io.innerCtrl.bits.hasel && (io.innerCtrl.bits.hamask(component))))) {
+      when (io.innerCtrl.fire() && io.innerCtrl.bits.ackhavereset && hamaskWrSel(component)) {
         haveResetBitRegs(component) := false.B
       }
     }
@@ -809,7 +810,7 @@ class TLDebugModuleInner(device: Device, getNComponents: () => Int, beatBytes: I
             resumeReqRegs(component) := false.B
           }
         }
-        when (resumereq && ((io.innerCtrl.bits.hartsel === component.U) || (supportHartArray.B && io.innerCtrl.bits.hasel && io.innerCtrl.bits.hamask(component))))  {
+        when (resumereq && hamaskWrSel(component)) {
           resumeReqRegs(component) := true.B
         }
       }
