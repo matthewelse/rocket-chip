@@ -190,7 +190,7 @@ class DebugCtrlBundle (nComponents: Int)(implicit val p: Parameters) extends Par
   *  the TL clock. Therefore, it is divided into "Outer" portion (running
   *  of off dmiClock and dmiReset) and "Inner" (running off tlClock and tlReset).
   *  This allows DMCONTROL.haltreq, hartsel, hasel, hawindowsel, hawindow, dmactive,
-  *  and ndreset to be modified even while the Core is in reset or not being clocked. 
+  *  and ndreset to be modified even while the Core is in reset or not being clocked.
   *  Not all reads from the Debugger to the Debug Module will actually complete
   *  in these scenarios either, they will just block until tlClock and tlReset
   *  allow them to complete. This is not strictly necessary for 
@@ -328,7 +328,7 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
         name = "HAWINDOWSELReg"
       )))
 
-      HAWINDOWSELRdData := Wire(init = HAWINDOWSELReg)
+      HAWINDOWSELRdData := HAWINDOWSELReg
       HAWINDOWSELNxt := HAWINDOWSELReg
       when (~dmactive) {
         HAWINDOWSELNxt := HAWINDOWSELReset
@@ -373,7 +373,11 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
           if (((ii*haWindowSize) + jj) < nComponents) {
             val tempWrData = HAWINDOWWrData.maskdata.toBools
             val tempMaskReg = HAMASKReg.asUInt.toBools
-            hamask((ii*haWindowSize) + jj) := Mux(HAWINDOWWrEn && (ii.U === HAWINDOWSELReg.hawindowsel), tempWrData(jj), tempMaskReg(jj))
+            when (HAWINDOWWrEn && (ii.U === HAWINDOWSELReg.hawindowsel)) {
+              hamask(ii*haWindowSize + jj) := tempWrData(jj)
+	    }.otherwise {
+              hamask(ii*haWindowSize + jj) := tempMaskReg(jj)
+            }
           }
         }
       }
@@ -425,7 +429,8 @@ class TLDebugModuleOuter(device: Device)(implicit p: Parameters) extends LazyMod
       when (~dmactive) {
         debugIntNxt(component) := false.B
       }. otherwise {
-        when (DMCONTROLWrEn && ((DMCONTROLWrData.hartsello === component.U) || (supportHartArray.B && DMCONTROLWrData.hasel && hamask(component)))) {
+        when (DMCONTROLWrEn && ((DMCONTROLWrData.hartsello === component.U)
+	    || (if (supportHartArray) DMCONTROLWrData.hasel && hamask(component) else false.B))) {
           debugIntNxt(component) := DMCONTROLWrData.haltreq
         }
       }
