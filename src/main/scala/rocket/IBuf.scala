@@ -82,6 +82,8 @@ class IBuf(implicit p: Parameters) extends CoreModule {
   io.pc := Mux(nBufValid > 0, buf.pc, io.imem.bits.pc)
   expand(0, 0, inst)
 
+  val enableFusion = true;
+
   def expand(i: Int, j: UInt, curInst: UInt): Unit = if (i < retireWidth) {
     val exp = Module(new RVCExpander)
     exp.io.in := curInst
