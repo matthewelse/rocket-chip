@@ -45,9 +45,14 @@ case class RocketCoreParams(
   val lgPauseCycles = 5
   val haveFSDirty = false
   val pmpGranularity: Int = 4
-  val fetchWidth: Int = if (useCompressed) 2 else 1
+  val enableFusion: Boolean = true
+  //val fetchWidth: Int = if (useCompressed) 2 else 1
+  // does this stop the CPU from running correctly?
+  val fetchCount: Int = if (enableFusion) 2 else 1
+  val fetchScale: Int = if (useCompressed) 2 else 1
+  val fetchWidth: Int = fetchScale * fetchCount
   //  fetchWidth doubled, but coreInstBytes halved, for RVC:
-  val decodeWidth: Int = fetchWidth / (if (useCompressed) 2 else 1)
+  val decodeWidth: Int = 1
   val retireWidth: Int = 1
   val instBits: Int = if (useCompressed) 16 else 32
   val lrscCycles: Int = 80 // worst case is 14 mispredicted branches + slop
@@ -349,11 +354,15 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     A2_IMM -> ex_imm,
     A2_SIZE -> Mux(ex_reg_rvc, SInt(2), SInt(4))))
 
+
   val alu = Module(new ALU)
   alu.io.dw := ex_ctrl.alu_dw
   alu.io.fn := ex_ctrl.alu_fn
   alu.io.in2 := ex_op2.asUInt
   alu.io.in1 := ex_op1.asUInt
+
+  // add a third input to the ALU for macro fusion immediates as necessary
+  // alu.io.in3 := 0.U(xLen)
 
   val ex_scie_unpipelined_wdata = if (!rocketParams.useSCIE) 0.U else {
     val u = Module(new SCIEUnpipelined(xLen))
