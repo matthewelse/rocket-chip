@@ -43,7 +43,7 @@ class IBuf(implicit p: Parameters) extends CoreModule {
   val nIC = Mux(io.imem.bits.btb.taken, io.imem.bits.btb.bridx +& 1, UInt(fetchWidth)) - pcWordBits
   val nICReady = nReady - nBufValid
   val nValid = Mux(io.imem.valid, nIC, UInt(0)) + nBufValid
-  io.imem.ready := io.inst(0).ready && nReady >= nBufValid && (nICReady >= nIC || n >= nIC - nICReady)
+  io.imem.ready := io.inst(0).ready && nTake >= nBufValid && (nICReady >= nIC || n >= nIC - nICReady)
 
   if (n > 0) {
     when (io.inst(0).ready) {
