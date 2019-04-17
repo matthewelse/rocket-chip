@@ -19,18 +19,13 @@ class Instruction(implicit val p: Parameters) extends ParameterizedBundle with H
 }
 
 class IBuf(implicit p: Parameters) extends CoreModule {
-  // modification to produce two instructions at a time.
-  val resultWidth = 2
-
   val io = new Bundle {
-    // inputs
     val imem = Decoupled(new FrontendResp).flip
     val kill = Bool(INPUT)
-
-    // outputs
+    val skip_next = UInt(INPUT, 2) // skip n*2 bytes
     val pc = UInt(OUTPUT, vaddrBitsExtended)
     val btb_resp = new BTBResp().asOutput
-    val inst = Vec(resultWidth, Decoupled(new Instruction))
+    val inst = Vec(retireWidth, Decoupled(new Instruction))
   }
 
   // This module is meant to be more general, but it's not there yet
@@ -44,6 +39,7 @@ class IBuf(implicit p: Parameters) extends CoreModule {
 
   val pcWordBits = io.imem.bits.pc.extract(log2Ceil(fetchWidth*coreInstBytes)-1, log2Ceil(coreInstBytes))
   val nReady = Wire(init = UInt(0, log2Ceil(fetchWidth+1)))
+  val nTake = nReady + io.skip_next
   val nIC = Mux(io.imem.bits.btb.taken, io.imem.bits.btb.bridx +& 1, UInt(fetchWidth)) - pcWordBits
   val nICReady = nReady - nBufValid
   val nValid = Mux(io.imem.valid, nIC, UInt(0)) + nBufValid
@@ -51,16 +47,13 @@ class IBuf(implicit p: Parameters) extends CoreModule {
 
   if (n > 0) {
     when (io.inst(0).ready) {
-
-      nBufValid := Mux(nReady >= nBufValid, UInt(0), nBufValid - nReady)
-      if (n > 1) when (nReady > 0 && nReady < nBufValid) {
-        val shiftedBuf = shiftInsnRight(buf.data(n*coreInstBits-1, coreInstBits), (nReady-1)(log2Ceil(n-1)-1,0))
+      nBufValid := Mux(nTake >= nBufValid, UInt(0), nBufValid - nTake)
+      if (n > 1) when (nTake > 0 && nTake < nBufValid) {
+        val shiftedBuf = shiftInsnRight(buf.data(n*coreInstBits-1, coreInstBits), (nTake-1)(log2Ceil(n-1)-1,0))
         buf.data := Cat(buf.data(n*coreInstBits-1, (n-1)*coreInstBits), shiftedBuf((n-1)*coreInstBits-1, 0))
-        // TODO: either here
-        buf.pc := buf.pc & ~pcWordMask | (buf.pc + (nReady << log2Ceil(coreInstBytes))) & pcWordMask
+        buf.pc := buf.pc & ~pcWordMask | (buf.pc + (nTake << log2Ceil(coreInstBytes))) & pcWordMask
       }
-
-      when (io.imem.valid && nReady >= nBufValid && nICReady < nIC && n >= nIC - nICReady) {
+      when (io.imem.valid && nTake >= nBufValid && nICReady < nIC && n >= nIC - nICReady) {
         val shamt = pcWordBits + nICReady
         nBufValid := nIC - nICReady
         buf := io.imem.bits
@@ -77,9 +70,7 @@ class IBuf(implicit p: Parameters) extends CoreModule {
   val icShiftAmt = (fetchWidth + nBufValid - pcWordBits)(log2Ceil(fetchWidth), 0)
   val icData = shiftInsnLeft(Cat(io.imem.bits.data, Fill(fetchWidth, io.imem.bits.data(coreInstBits-1, 0))), icShiftAmt)
     .extract(3*fetchWidth*coreInstBits-1, 2*fetchWidth*coreInstBits)
-
-  // this masks the valid bits of icData.
-  val icMask = (~UInt(0, fetchWidth*coreInstBits) << (nBufValid << log2Ceil(coreInstBits))) (fetchWidth*coreInstBits-1,0)
+  val icMask = (~UInt(0, fetchWidth*coreInstBits) << (nBufValid << log2Ceil(coreInstBits)))(fetchWidth*coreInstBits-1,0)
   val inst = icData & icMask | buf.data & ~icMask
 
   val valid = (UIntToOH(nValid) - 1)(fetchWidth-1, 0)
@@ -93,7 +84,7 @@ class IBuf(implicit p: Parameters) extends CoreModule {
   io.pc := Mux(nBufValid > 0, buf.pc, io.imem.bits.pc)
   expand(0, 0, inst)
 
-  def expand(i: Int, j: UInt, curInst: UInt): Unit = if (i < resultWidth) {
+  def expand(i: Int, j: UInt, curInst: UInt): Unit = if (i < retireWidth) {
     val exp = Module(new RVCExpander)
     exp.io.in := curInst
     io.inst(i).bits.inst := exp.io.out
@@ -123,7 +114,7 @@ class IBuf(implicit p: Parameters) extends CoreModule {
 
       expand(i+1, null, curInst >> 32)
     }
-}
+  }
 
   def shiftInsnLeft(in: UInt, dist: UInt) = {
     val r = in.getWidth/coreInstBits

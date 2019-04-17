@@ -46,6 +46,7 @@ class IntCtrlSigs extends Bundle {
   val fence = Bool()
   val amo = Bool()
   val dp = Bool()
+  val fuse_clear = Bool()
 
   def default: List[BitPat] =
                 //           jal                                                             renf1               fence.i
@@ -64,6 +65,7 @@ class IntCtrlSigs extends Bundle {
                    sel_alu1, sel_imm, alu_dw, alu_fn, mem, mem_cmd,
                    rfs1, rfs2, rfs3, wfd, mul, div, wxd, csr, fence_i, fence, amo, dp)
     sigs zip decoder map {case(s,d) => s := d}
+    fuse_clear := false.B
     this
   }
 }
