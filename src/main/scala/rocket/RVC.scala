@@ -152,10 +152,6 @@ class RVCDecoder(x: UInt, xLen: Int) {
   }
 }
 
-class FusionDecoder(bits: UInt, xLen: Int) {
-
-}
-
 class RVCExpander(implicit val p: Parameters) extends Module with HasCoreParameters {
   val io = new Bundle {
     val in = UInt(INPUT, 32)
@@ -163,22 +159,9 @@ class RVCExpander(implicit val p: Parameters) extends Module with HasCoreParamet
     val rvc = Bool(OUTPUT)
   }
 
-  val enableFusion = true;
-
   if (usingCompressed) {
     io.rvc := io.in(1,0) =/= UInt(3)
     io.out := new RVCDecoder(io.in, p(XLen)).decode
-  } else if (usingCompressed && enableFusion) {
-    // we can implement op fusion quite simply here by lying to the decoder if the two instructions are fusable:
-    val fuse_decode = new FusionDecoder(io.in, p(XLen))
-
-    //when (fusable.fusable) {
-    //  io.rvc := false.B  
-    //  io.out := new FusionDecoder(io.in, p(XLen)).decode
-    //} otherwise {
-      io.rvc := io.in(1,0) =/= UInt(3)
-      io.out := new RVCDecoder(io.in, p(XLen)).decode
-    //}
   } else {
     io.rvc := Bool(false)
     io.out := new RVCDecoder(io.in, p(XLen)).passthrough
