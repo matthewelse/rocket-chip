@@ -4,7 +4,6 @@
 package freechips.rocketchip.rocket
 
 import Chisel._
-import Chisel.ImplicitConversions._
 import chisel3.experimental._
 import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.tile._
@@ -267,7 +266,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
 
   val id_scie_decoder = if (!rocketParams.useSCIE) Wire(new SCIEDecoderInterface) else {
     val d = Module(new SCIEDecoder)
-    assert(PopCount(d.io.unpipelined :: d.io.pipelined :: d.io.multicycle :: Nil) <= 1)
+    assert(PopCount(d.io.unpipelined :: d.io.pipelined :: d.io.multicycle :: Nil) <= 1.U)
     d.io.insn := id_raw_inst(0)
     d.io
   }
@@ -288,7 +287,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val id_fence_succ = id_inst(0)(23,20)
   val id_fence_next = id_ctrl.fence || id_ctrl.amo && id_amo_aq
   val id_mem_busy = !io.dmem.ordered || io.dmem.req.valid
-  when (!id_mem_busy) { id_reg_fence := false }
+  when (!id_mem_busy) { id_reg_fence := false.B }
   val id_rocc_busy = Bool(usingRoCC) &&
     (io.rocc.busy || ex_reg_valid && ex_ctrl.rocc ||
      mem_reg_valid && mem_ctrl.rocc || wb_reg_valid && wb_ctrl.rocc)
@@ -407,8 +406,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     ex_ctrl.csr := id_csr
     ex_scie_unpipelined := id_ctrl.scie && id_scie_decoder.unpipelined
     ex_scie_pipelined := id_ctrl.scie && id_scie_decoder.pipelined
-    when (id_ctrl.fence && id_fence_succ === 0) { id_reg_pause := true }
-    when (id_fence_next) { id_reg_fence := true }
+    when (id_ctrl.fence && id_fence_succ === 0.U) { id_reg_pause := true.B }
+    when (id_fence_next) { id_reg_fence := true.B }
     when (id_xcpt) { // pass PC down ALU writeback pipeline for badaddr
       ex_ctrl.alu_fn := ALU.FN_ADD
       ex_ctrl.alu_dw := DW_XPR
@@ -417,7 +416,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
       when (id_xcpt1.asUInt.orR) { // badaddr := PC+2
         ex_ctrl.sel_alu1 := A1_PC
         ex_ctrl.sel_alu2 := A2_SIZE
-        ex_reg_rvc := true
+        ex_reg_rvc := true.B
       }
       when (bpu.io.xcpt_if || id_xcpt0.asUInt.orR) { // badaddr := PC
         ex_ctrl.sel_alu1 := A1_PC
@@ -443,7 +442,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     }
     when (id_illegal_insn) {
       val inst = Mux(ibuf.io.inst(0).bits.rvc, id_raw_inst(0)(15, 0), id_raw_inst(0))
-      ex_reg_rs_bypass(0) := false
+      ex_reg_rs_bypass(0) := false.B
       ex_reg_rs_lsb(0) := inst(log2Ceil(bypass_sources.size)-1, 0)
       ex_reg_rs_msb(0) := inst >> log2Ceil(bypass_sources.size)
     }
@@ -465,7 +464,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val replay_ex = ex_reg_replay || (ex_reg_valid && (replay_ex_structural || replay_ex_load_use))
   val ctrl_killx = take_pc_mem_wb || replay_ex || !ex_reg_valid
   // detect 2-cycle load-use delay for LB/LH/SC
-  val ex_slow_bypass = ex_ctrl.mem_cmd === M_XSC || ex_reg_mem_size < 2
+  val ex_slow_bypass = ex_ctrl.mem_cmd === M_XSC || ex_reg_mem_size < 2.U
   val ex_sfence = Bool(usingVM) && ex_ctrl.mem && ex_ctrl.mem_cmd === M_SFENCE
 
   val (ex_xcpt, ex_cause) = checkExceptions(List(
@@ -488,7 +487,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val mem_int_wdata = Mux(!mem_reg_xcpt && (mem_ctrl.jalr ^ mem_npc_misaligned), mem_br_target, mem_reg_wdata.asSInt).asUInt
   val mem_cfi = mem_ctrl.branch || mem_ctrl.jalr || mem_ctrl.jal
   val mem_cfi_taken = (mem_ctrl.branch && mem_br_taken) || mem_ctrl.jalr || mem_ctrl.jal
-  val mem_direction_misprediction = mem_ctrl.branch && mem_br_taken =/= (usingBTB && mem_reg_btb_resp.taken)
+  val mem_direction_misprediction = mem_ctrl.branch && mem_br_taken =/= (usingBTB.B && mem_reg_btb_resp.taken)
   val mem_misprediction = if (usingBTB) mem_wrong_npc else mem_cfi_taken
   take_pc_mem := mem_reg_valid && (mem_misprediction || mem_reg_sfence)
 
@@ -500,7 +499,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   // on pipeline flushes, cause mem_npc to hold the sequential npc, which
   // will drive the W-stage npc mux
   when (mem_reg_valid && mem_reg_flush_pipe) {
-    mem_reg_sfence := false
+    mem_reg_sfence := false.B
   }.elsewhen (ex_pc_valid) {
     mem_ctrl := ex_ctrl
     mem_scie_unpipelined := ex_scie_unpipelined
@@ -527,8 +526,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     }
     when (ex_ctrl.jalr && csr.io.status.debug) {
       // flush I$ on D-mode JALR to effect uncached fetch without D$ flush
-      mem_ctrl.fence_i := true
-      mem_reg_flush_pipe := true
+      mem_ctrl.fence_i := true.B
+      mem_reg_flush_pipe := true.B
     }
   }
 
@@ -657,10 +656,10 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   csr.io.fcsr_flags := io.fpu.fcsr_flags
   csr.io.rocc_interrupt := io.rocc.interrupt
   csr.io.pc := wb_reg_pc
-  val tval_valid = wb_xcpt && wb_cause.isOneOf(Causes.illegal_instruction, Causes.breakpoint,
-    Causes.misaligned_load, Causes.misaligned_store,
-    Causes.load_access, Causes.store_access, Causes.fetch_access,
-    Causes.load_page_fault, Causes.store_page_fault, Causes.fetch_page_fault)
+  val tval_valid = wb_xcpt && wb_cause.isOneOf(Causes.illegal_instruction.U, Causes.breakpoint.U,
+    Causes.misaligned_load.U, Causes.misaligned_store.U,
+    Causes.load_access.U, Causes.store_access.U, Causes.fetch_access.U,
+    Causes.load_page_fault.U, Causes.store_page_fault.U, Causes.fetch_page_fault.U)
   csr.io.tval := Mux(tval_valid, encodeVirtualAddress(wb_reg_wdata, wb_reg_wdata), 0.U)
   io.ptw.ptbr := csr.io.ptbr
   (io.ptw.customCSRs.csrs zip csr.io.customCSRs).map { case (lhs, rhs) => lhs := rhs }
@@ -771,7 +770,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     CFIType.branch)))
   io.imem.btb_update.bits.target := io.imem.req.bits.pc
   io.imem.btb_update.bits.br_pc := (if (usingCompressed) mem_reg_pc + Mux(mem_reg_rvc, UInt(0), UInt(2)) else mem_reg_pc)
-  io.imem.btb_update.bits.pc := ~(~io.imem.btb_update.bits.br_pc | (coreInstBytes*fetchWidth-1))
+  io.imem.btb_update.bits.pc := ~(~io.imem.btb_update.bits.br_pc | (coreInstBytes*fetchWidth-1).U)
   io.imem.btb_update.bits.prediction := mem_reg_btb_resp
 
   io.imem.bht_update.valid := mem_reg_valid && !take_pc_wb
@@ -799,11 +798,11 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   io.dmem.req.bits.cmd  := ex_ctrl.mem_cmd
   io.dmem.req.bits.size := ex_reg_mem_size
   io.dmem.req.bits.signed := !ex_reg_inst(14)
-  io.dmem.req.bits.phys := Bool(false)
+  io.dmem.req.bits.phys := false.B
   io.dmem.req.bits.addr := encodeVirtualAddress(ex_rs(0), alu.io.adder_out)
   io.dmem.s1_data.data := (if (fLen == 0) mem_reg_rs2 else Mux(mem_ctrl.fp, Fill((xLen max fLen) / fLen, io.fpu.store_data), mem_reg_rs2))
   io.dmem.s1_kill := killm_common || mem_ldst_xcpt || fpu_kill_mem
-  io.dmem.s2_kill := false
+  io.dmem.s2_kill := false.B
   // don't let D$ go to sleep if we're probably going to use it soon
   io.dmem.keep_clock_enabled := ibuf.io.inst(0).valid && id_ctrl.mem
 
@@ -815,8 +814,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   io.rocc.cmd.bits.rs2 := wb_reg_rs2
 
   // gate the clock
-  val unpause = csr.io.time(rocketParams.lgPauseCycles-1, 0) === 0 || io.dmem.perf.release || take_pc
-  when (unpause) { id_reg_pause := false }
+  val unpause = csr.io.time(rocketParams.lgPauseCycles-1, 0) === 0.U || io.dmem.perf.release || take_pc
+  when (unpause) { id_reg_pause := false.B }
   io.cease := csr.io.status.cease && !clock_en_reg
   if (rocketParams.clockGate) {
     long_latency_stall := csr.io.csr_stall || io.dmem.perf.blocked || id_reg_pause && !unpause
@@ -825,7 +824,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
       ex_pc_valid || mem_pc_valid || wb_pc_valid || // instruction in flight
       io.ptw.customCSRs.disableCoreClockGate || // chicken bit
       !div.io.req.ready || // mul/div in flight
-      usingFPU && !io.fpu.fcsr_rdy || // long-latency FPU in flight
+      usingFPU.B && !io.fpu.fcsr_rdy || // long-latency FPU in flight
       io.dmem.replay_next || // long-latency load replaying
       (!long_latency_stall && (ibuf.io.inst(0).valid || io.imem.resp.valid)) // instruction pending
 
