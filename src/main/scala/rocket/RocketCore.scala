@@ -242,8 +242,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   ibuf.io.kill := take_pc
 
   val enableFusion = true
-  if (!enableFusion)
-    require(decodeWidth == 1 /* TODO */ && retireWidth == decodeWidth)
+  
+  //require(decodeWidth == 1 /* TODO */ && retireWidth == decodeWidth)
 
   val id_ctrl = Wire(new IntCtrlSigs()).decode(id_inst(0), decode_table)
 
@@ -254,14 +254,17 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   
   val fusible = canFuse(id_inst(0), id_inst(1), id_expanded_inst(0), id_expanded_inst(1))
 
-  ibuf.io.skip_next := Mux(fusible, Mux(ibuf.io.inst(1).bits.rvc, 1.U, 2.U), 0.U)
-
   if (enableFusion) {
+    //ibuf.io.skip_next := Mux(fusible, Mux(ibuf.io.inst(1).bits.rvc, 1.U, 2.U), 0.U)
+    ibuf.io.skip_next := false.B
+
     when(fusible) {
       // we should change the result of the decoder
       id_ctrl.alu_fn := ALU.FN_AND 
       id_ctrl.fuse_clear := true.B
     }  
+  } else {
+    ibuf.io.skip_next := 0.U
   }
 
   val id_raddr3 = id_expanded_inst(0).rs3
