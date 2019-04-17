@@ -52,7 +52,7 @@ case class RocketCoreParams(
   val fetchWidth: Int = fetchScale * fetchCount
   //  fetchWidth doubled, but coreInstBytes halved, for RVC:
   val decodeWidth: Int = 1
-  val retireWidth: Int = 1
+  val retireWidth: Int = if (enableFusion) 2 else 1 // not actually retiring two instructions per cycle
   val instBits: Int = if (useCompressed) 16 else 32
   val lrscCycles: Int = 80 // worst case is 14 mispredicted branches + slop
   override def customCSRs(implicit p: Parameters) = new RocketCustomCSRs
@@ -241,8 +241,29 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   ibuf.io.imem <> io.imem.resp
   ibuf.io.kill := take_pc
 
-  require(decodeWidth == 1 /* TODO */ && retireWidth == decodeWidth)
+  val enableFusion = true
+  if (!enableFusion)
+    require(decodeWidth == 1 /* TODO */ && retireWidth == decodeWidth)
+
   val id_ctrl = Wire(new IntCtrlSigs()).decode(id_inst(0), decode_table)
+
+  val i1_rd = id_expanded_inst(0).rd
+  val i2_rd = id_expanded_inst(1).rd
+  val i1_rs1 = id_expanded_inst(0).rs1
+  val i2_rs1 = id_expanded_inst(1).rs1
+  
+  val fusible = canFuse(id_inst(0), id_inst(1), id_expanded_inst(0), id_expanded_inst(1))
+
+  ibuf.io.skip_next := Mux(fusible, Mux(ibuf.io.inst(1).bits.rvc, 1.U, 2.U), 0.U)
+
+  if (enableFusion) {
+    when(fusible) {
+      // we should change the result of the decoder
+      id_ctrl.alu_fn := ALU.FN_AND 
+      id_ctrl.fuse_clear := true.B
+    }  
+  }
+
   val id_raddr3 = id_expanded_inst(0).rs3
   val id_raddr2 = id_expanded_inst(0).rs2
   val id_raddr1 = id_expanded_inst(0).rs1
@@ -348,10 +369,19 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val ex_op1 = MuxLookup(ex_ctrl.sel_alu1, SInt(0), Seq(
     A1_RS1 -> ex_rs(0).asSInt,
     A1_PC -> ex_reg_pc.asSInt))
-  val ex_op2 = MuxLookup(ex_ctrl.sel_alu2, SInt(0), Seq(
-    A2_RS2 -> ex_rs(1).asSInt,
-    A2_IMM -> ex_imm,
-    A2_SIZE -> Mux(ex_reg_rvc, SInt(2), SInt(4))))
+
+  val ex_op2_fused: SInt = 0xFFFFFFFFL.S(xLen.W)
+  val ex_op2_normal: SInt = 
+    MuxLookup(ex_ctrl.sel_alu2,
+      SInt(0),
+      Seq(
+        A2_RS2 -> ex_rs(1).asSInt,
+        A2_IMM -> ex_imm,
+        A2_SIZE -> Mux(ex_reg_rvc, SInt(2), SInt(4))
+      )
+    )
+
+  val ex_op2 = Mux(ex_ctrl.fuse_clear, ex_op2_fused, ex_op2_normal)
 
 
   val alu = Module(new ALU)
@@ -759,7 +789,13 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   io.imem.sfence.bits.asid := wb_reg_rs2
   io.ptw.sfence := io.imem.sfence
 
+  val fuseCount = Reg(UInt(32.W), init=0.U)
+  fuseCount := fuseCount + Mux(fusible, 1.U, 0.U)
+  val actualFusionCount = Reg(UInt(32.W), init=0.U)
+  actualFusionCount := actualFusionCount + Mux(ibuf.io.inst(1).ready, 1.U, 0.U)
+
   ibuf.io.inst(0).ready := !ctrl_stalld
+  //ibuf.io.inst(1).ready := !ctrl_stalld && fusible
 
   io.imem.btb_update.valid := mem_reg_valid && !take_pc_wb && mem_wrong_npc && (!mem_cfi || mem_cfi_taken)
   io.imem.btb_update.bits.isValid := mem_cfi
@@ -886,6 +922,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
          coreMonitorBundle.rd0src, coreMonitorBundle.rd0val,
          coreMonitorBundle.rd1src, coreMonitorBundle.rd1val,
          coreMonitorBundle.inst, coreMonitorBundle.inst)
+    printf(" fuseCount: %d, i1 %d %d, i2 %d %d DASM(%x) DASM(%x)\n", fuseCount, i1_rd, i1_rs1, i2_rd, i2_rs1, id_inst(0), id_inst(1))
   }
 
   PlusArg.timeout(
@@ -933,6 +970,20 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
       ens = ens || en
       when (ens) { _r := _next }
     }
+  }
+
+  def canFuse(i1: UInt, i2: UInt, i1_full: ExpandedInstruction, i2_full: ExpandedInstruction) = {
+    val fuse_instr_first_i = i1 === Instructions.SLLI 
+    val fuse_instr_first_c = i1 === Instructions.C_SLLI 
+    val fuse_instr_first = fuse_instr_first_i || fuse_instr_first_c
+
+    val fuse_instr_end = i2 === Instructions.SRLI 
+
+    val fuse_first = fuse_instr_first && (i1_full.rd === i2_full.rd)
+    val fuse_end = fuse_instr_end && (i2_full.rd === i2_full.rs1)
+    val can_fuse = fuse_first && fuse_end// && ibuf.io.inst(1).valid
+  
+    can_fuse
   }
 }
 
