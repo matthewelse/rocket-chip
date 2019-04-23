@@ -160,7 +160,7 @@ class PerfCounterIO(implicit p: Parameters) extends CoreBundle
   val inc = UInt(INPUT, log2Ceil(1+retireWidth))
 }
 
-class TracedInstruction(implicit p: Parameters) extends CoreBundle {
+class TracedInstruction(implicit p: Parameters) extends CoreBundle with Clocked {
   val valid = Bool()
   val iaddr = UInt(width = coreMaxAddrBits)
   val insn = UInt(width = iLen)
@@ -613,7 +613,7 @@ class CSRFile(
     cover(en && delegable && delegate, s"INTERRUPT_S_$i")
   }
   for (i <- 0 until xLen) {
-    val supported_exceptions = 0x87e |
+    val supported_exceptions: BigInt = 0x87e |
       (if (usingCompressed && !coreParams.misaWritable) 0 else 1) |
       (if (usingUser) 0x100 else 0) |
       (if (usingVM) 0xb200 else 0)
@@ -658,7 +658,11 @@ class CSRFile(
 
   // cover access to register
   read_mapping.foreach( {case (k, v) => {
-    cover(io.rw.cmd.isOneOf(CSR.W, CSR.S, CSR.C) && io.rw.addr===k, "CSR_access_"+k.toString, "Cover Accessing Core CSR field")
+    when (!k(11,10).andR) {  // Cover points for RW CSR registers
+      cover(io.rw.cmd.isOneOf(CSR.W, CSR.S, CSR.C) && io.rw.addr===k, "CSR_access_"+k.toString, "Cover Accessing Core CSR field")
+    } .otherwise { // Cover points for RO CSR registers
+      cover(io.rw.cmd===CSR.R && io.rw.addr===k, "CSR_access_"+k.toString, "Cover Accessing Core CSR field")
+    }
   }})
 
   val set_fs_dirty = Wire(init = io.set_fs_dirty.getOrElse(false.B))
@@ -809,7 +813,7 @@ class CSRFile(
             val newBPC = readModifyWriteCSR(io.rw.cmd, bp.control.asUInt, io.rw.wdata).asTypeOf(bp.control)
             val dMode = newBPC.dmode && reg_debug && (prevDMode || !prevChain)
             bp.control.dmode := dMode
-            bp.control.action := dMode && newBPC.action
+            when (dMode || (newBPC.action > 1.U)) { bp.control.action := newBPC.action }.otherwise { bp.control.action := 0.U }
             bp.control.chain := newBPC.chain && !(prevChain || nextChain) && (dMode || !nextDMode)
           }
         }
@@ -861,7 +865,7 @@ class CSRFile(
     if (!usingUser) bpc.u := false
     if (!usingVM && !usingUser) bpc.m := true
     when (reset) {
-      bpc.action := false
+      bpc.action := 0.U
       bpc.dmode := false
       bpc.chain := false
       bpc.r := false
@@ -877,6 +881,8 @@ class CSRFile(
   }
 
   for (((t, insn), i) <- (io.trace zip io.inst).zipWithIndex) {
+    t.clock := clock
+    t.reset := reset
     t.exception := io.retire >= i && exception
     t.valid := io.retire > i || t.exception
     t.insn := insn
