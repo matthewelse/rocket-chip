@@ -255,8 +255,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val fusible = canFuse(id_inst(0), id_inst(1), id_expanded_inst(0), id_expanded_inst(1))
 
   if (enableFusion) {
-    //ibuf.io.skip_next := Mux(fusible, Mux(ibuf.io.inst(1).bits.rvc, 1.U, 2.U), 0.U)
-    ibuf.io.skip_next := false.B
+    ibuf.io.skip_next := Mux(fusible, Mux(ibuf.io.inst(1).bits.rvc, 1.U, 2.U), 0.U)
+    //ibuf.io.skip_next := 0.U
 
     when(fusible) {
       // we should change the result of the decoder
@@ -513,9 +513,12 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     Mux(mem_ctrl.jal, ImmGen(IMM_UJ, mem_reg_inst),
     Mux(mem_reg_rvc, SInt(2), SInt(4))))
   val mem_npc = (Mux(mem_ctrl.jalr || mem_reg_sfence, encodeVirtualAddress(mem_reg_wdata, mem_reg_wdata).asSInt, mem_br_target) & SInt(-2)).asUInt
+  // if the instruction is fusible, ignore npc?
   val mem_wrong_npc =
+    Mux(RegNext(RegNext(fusible)),
+    false.B,
     Mux(ex_pc_valid, mem_npc =/= ex_reg_pc,
-    Mux(ibuf.io.inst(0).valid || ibuf.io.imem.valid, mem_npc =/= ibuf.io.pc, Bool(true)))
+    Mux(ibuf.io.inst(0).valid || ibuf.io.imem.valid, mem_npc =/= ibuf.io.pc, Bool(true))))
   val mem_npc_misaligned = !csr.io.status.isa('c'-'a') && mem_npc(1) && !mem_reg_sfence
   val mem_int_wdata = Mux(!mem_reg_xcpt && (mem_ctrl.jalr ^ mem_npc_misaligned), mem_br_target, mem_reg_wdata.asSInt).asUInt
   val mem_cfi = mem_ctrl.branch || mem_ctrl.jalr || mem_ctrl.jal
@@ -773,6 +776,13 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     csr.io.csr_stall ||
     id_reg_pause
   ctrl_killd := !ibuf.io.inst(0).valid || ibuf.io.inst(0).bits.replay || take_pc_mem_wb || ctrl_stalld || csr.io.interrupt
+  printf("kill cause: %d || %d || %d || %d || %d",
+    !ibuf.io.inst(0).valid.asUInt(),
+    ibuf.io.inst(0).bits.replay.asUInt(),
+    take_pc_mem_wb.asUInt(),
+    ctrl_stalld.asUInt(),
+    csr.io.interrupt.asUInt()
+    )
 
   io.imem.req.valid := take_pc
   io.imem.req.bits.speculative := !take_pc_wb
@@ -798,7 +808,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   actualFusionCount := actualFusionCount + Mux(ibuf.io.inst(1).ready, 1.U, 0.U)
 
   ibuf.io.inst(0).ready := !ctrl_stalld
-  //ibuf.io.inst(1).ready := !ctrl_stalld && fusible
+  ibuf.io.inst(1).ready := !ctrl_stalld && fusible 
 
   io.imem.btb_update.valid := mem_reg_valid && !take_pc_wb && mem_wrong_npc && (!mem_cfi || mem_cfi_taken)
   io.imem.btb_update.bits.isValid := mem_cfi
@@ -925,7 +935,15 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
          coreMonitorBundle.rd0src, coreMonitorBundle.rd0val,
          coreMonitorBundle.rd1src, coreMonitorBundle.rd1val,
          coreMonitorBundle.inst, coreMonitorBundle.inst)
-    printf(" fuseCount: %d, i1 %d %d, i2 %d %d DASM(%x) DASM(%x)\n", fuseCount, i1_rd, i1_rs1, i2_rd, i2_rs1, id_inst(0), id_inst(1))
+    
+    val stall_i = Mux(ctrl_stalld, 1.U, 0.U)
+    val kill_i = Mux(ctrl_killd, 1.U, 0.U)
+    val fuse_i = Mux(fusible, 1.U, 0.U)
+
+    val ins_valid = Mux(ibuf.io.inst(0).valid, 1.U, 0.U)
+
+    // let's see why the pipeline is stalling
+    printf("stall: %d, kill: %d, fuse: %d, DASM(%x) <- %d, DASM(%x)\n", stall_i, kill_i, fuse_i, id_inst(0), ins_valid, id_inst(1))
   }
 
   PlusArg.timeout(
