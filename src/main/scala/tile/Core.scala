@@ -20,6 +20,7 @@ trait CoreParams {
   val useAtomicsOnlyForIO: Boolean
   val useCompressed: Boolean
   val useSCIE: Boolean
+  val useMacroFusion: Boolean
   val mulDiv: Option[MulDivParams]
   val fpu: Option[FPUParams]
   val fetchWidth: Int
@@ -57,6 +58,7 @@ trait HasCoreParameters extends HasTileParameters {
   val usingAtomicsInCache = usingAtomics && !usingAtomicsOnlyForIO
   val usingCompressed = coreParams.useCompressed
   val usingSCIE = coreParams.useSCIE
+  val usingMacroFusion = coreParams.useMacroFusion
 
   val retireWidth = coreParams.retireWidth
   val fetchWidth = coreParams.fetchWidth
