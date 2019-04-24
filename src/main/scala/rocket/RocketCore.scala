@@ -22,6 +22,7 @@ case class RocketCoreParams(
   useAtomicsOnlyForIO: Boolean = false,
   useCompressed: Boolean = true,
   useSCIE: Boolean = false,
+  useMacroFusion: Boolean = true,
   nLocalInterrupts: Int = 0,
   nBreakpoints: Int = 1,
   useBPWatch: Boolean = false,
@@ -45,15 +46,14 @@ case class RocketCoreParams(
   val lgPauseCycles = 5
   val haveFSDirty = false
   val pmpGranularity: Int = 4
-  val enableFusion: Boolean = true
   //val fetchWidth: Int = if (useCompressed) 2 else 1
   // does this stop the CPU from running correctly?
-  val fetchCount: Int = if (enableFusion) 2 else 1
+  val fetchCount: Int = if (useMacroFusion) 2 else 1
   val fetchScale: Int = if (useCompressed) 2 else 1
   val fetchWidth: Int = fetchScale * fetchCount
   //  fetchWidth doubled, but coreInstBytes halved, for RVC:
   val decodeWidth: Int = 1
-  val retireWidth: Int = if (enableFusion) 2 else 1 // not actually retiring two instructions per cycle
+  val retireWidth: Int = if (useMacroFusion) 2 else 1 // not actually retiring two instructions per cycle
   val instBits: Int = if (useCompressed) 16 else 32
   val lrscCycles: Int = 80 // worst case is 14 mispredicted branches + slop
   override def customCSRs(implicit p: Parameters) = new RocketCustomCSRs
@@ -245,30 +245,23 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   ibuf.io.imem <> io.imem.resp
   ibuf.io.kill := take_pc
 
-  val enableFusion = true
-  
-  //require(decodeWidth == 1 /* TODO */ && retireWidth == decodeWidth)
+  require(usingMacroFusion || decodeWidth == 1 && retireWidth == decodeWidth)
 
   val id_ctrl = Wire(new IntCtrlSigs()).decode(id_inst(0), decode_table)
 
-  val i1_rd = id_expanded_inst(0).rd
-  val i2_rd = id_expanded_inst(1).rd
-  val i1_rs1 = id_expanded_inst(0).rs1
-  val i2_rs1 = id_expanded_inst(1).rs1
+  val (fuse_shift, fuse_ld) = canFuse(id_expanded_inst(0), id_expanded_inst(1))
+  val fusible = fuse_shift // || fuse_ld
   
-  val fusible = canFuse(id_inst(0), id_inst(1), id_expanded_inst(0), id_expanded_inst(1))
-
-  if (enableFusion) {
-    ibuf.io.skip_next := Mux(fusible, Mux(ibuf.io.inst(1).bits.rvc, 1.U, 2.U), 0.U)
-    //ibuf.io.skip_next := 0.U
-
-    when(fusible) {
+  if (usingMacroFusion) {
+    when(fuse_shift) {
       // we should change the result of the decoder
       id_ctrl.alu_fn := ALU.FN_AND 
       id_ctrl.fuse_clear := true.B
     }  
-  } else {
-    ibuf.io.skip_next := 0.U
+   // elsewhen (fuse_ld) {
+   //   // do an add then a load
+   //   id_ctrl.alu_
+   // }
   }
 
   val id_raddr3 = id_expanded_inst(0).rs3
@@ -1001,18 +994,38 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     }
   }
 
-  def canFuse(i1: UInt, i2: UInt, i1_full: ExpandedInstruction, i2_full: ExpandedInstruction) = {
-    val fuse_instr_first_i = i1 === Instructions.SLLI 
-    val fuse_instr_first_c = i1 === Instructions.C_SLLI 
+  def canFuseShifts(i1: ExpandedInstruction, i2: ExpandedInstruction) = {
+    val fuse_instr_first_i = i1.bits === Instructions.SLLI 
+    val fuse_instr_first_c = i1.bits === Instructions.C_SLLI 
     val fuse_instr_first = fuse_instr_first_i || fuse_instr_first_c
 
-    val fuse_instr_end = i2 === Instructions.SRLI 
+    val fuse_instr_end = i2.bits === Instructions.SRLI 
 
-    val fuse_first = fuse_instr_first && (i1_full.rd === i2_full.rd)
-    val fuse_end = fuse_instr_end && (i2_full.rd === i2_full.rs1)
-    val can_fuse = fuse_first && fuse_end// && ibuf.io.inst(1).valid
+    val fuse_first = fuse_instr_first && (i1.rd === i2.rd)
+    val fuse_end = fuse_instr_end && (i2.rd === i2.rs1)
+    val can_fuse = fuse_first && fuse_end
   
     can_fuse
+  }
+
+  def canFuseAddLoad(i1: ExpandedInstruction, i2: ExpandedInstruction) = {
+    val fuse_instr_first_i = i1.bits === Instructions.ADD 
+    val fuse_instr_first_c = i1.bits === Instructions.C_ADD 
+    val fuse_instr_first = fuse_instr_first_i || fuse_instr_first_c
+
+    val fuse_instr_end_i = i2.bits === Instructions.LD 
+    val fuse_instr_end_c = i2.bits === Instructions.C_LD
+    val fuse_instr_end = fuse_instr_end_i || fuse_instr_end_c
+
+    val fuse_first = fuse_instr_first && (i1.rd === i2.rd)
+    val fuse_end = fuse_instr_end && (i2.rd === i2.rs1)
+    val can_fuse = fuse_first && fuse_end
+  
+    can_fuse
+  }
+
+  def canFuse(i1: ExpandedInstruction, i2: ExpandedInstruction) = {
+    (canFuseShifts(i1, i2), canFuseAddLoad(i1, i2))
   }
 }
 

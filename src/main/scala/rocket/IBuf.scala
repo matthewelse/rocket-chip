@@ -22,7 +22,6 @@ class IBuf(implicit p: Parameters) extends CoreModule {
   val io = new Bundle {
     val imem = Decoupled(new FrontendResp).flip
     val kill = Bool(INPUT)
-    val skip_next = UInt(INPUT, 2) // skip n*2 bytes
     val pc = UInt(OUTPUT, vaddrBitsExtended)
     val btb_resp = new BTBResp().asOutput
     val inst = Vec(retireWidth, Decoupled(new Instruction))
@@ -39,7 +38,7 @@ class IBuf(implicit p: Parameters) extends CoreModule {
 
   val pcWordBits = io.imem.bits.pc.extract(log2Ceil(fetchWidth*coreInstBytes)-1, log2Ceil(coreInstBytes))
   val nReady = Wire(init = UInt(0, log2Ceil(fetchWidth+1)))
-  val nTake = nReady// + io.skip_next
+  val nTake = nReady
   val nIC = Mux(io.imem.bits.btb.taken, io.imem.bits.btb.bridx +& 1, UInt(fetchWidth)) - pcWordBits
   val nICReady = nReady - nBufValid
   val nValid = Mux(io.imem.valid, nIC, UInt(0)) + nBufValid
@@ -83,9 +82,6 @@ class IBuf(implicit p: Parameters) extends CoreModule {
   io.btb_resp := io.imem.bits.btb
   io.pc := Mux(nBufValid > 0, buf.pc, io.imem.bits.pc)
   expand(0, 0, inst)
-
-  // this looks like what I'd expect
-  printf("IBuf: skip: %d, %x, %x\n", io.skip_next, inst, valid)
 
   def expand(i: Int, j: UInt, curInst: UInt): Unit = if (i < retireWidth) {
     val exp = Module(new RVCExpander)
