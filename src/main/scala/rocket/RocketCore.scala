@@ -3,7 +3,8 @@
 
 package freechips.rocketchip.rocket
 
-import Chisel._
+import chisel3._
+import chisel3.util.{RegEnable, PriorityMux, PriorityEncoder, BitPat, Fill, PopCount, log2Ceil, log2Up, Cat, MuxLookup}
 import chisel3.experimental._
 import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.tile._
@@ -360,23 +361,23 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   // execute stage
   val bypass_mux = bypass_sources.map(_._3)
   val ex_reg_rs_bypass = Reg(Vec(id_raddr.size, Bool()))
-  val ex_reg_rs_lsb = Reg(Vec(id_raddr.size, UInt(width = log2Ceil(bypass_sources.size))))
+  val ex_reg_rs_lsb = Reg(Vec(id_raddr.size, UInt(log2Ceil(bypass_sources.size).W)))
   val ex_reg_rs_msb = Reg(Vec(id_raddr.size, UInt()))
   val ex_rs = for (i <- 0 until id_raddr.size)
     yield Mux(ex_reg_rs_bypass(i), bypass_mux(ex_reg_rs_lsb(i)), Cat(ex_reg_rs_msb(i), ex_reg_rs_lsb(i)))
   val ex_imm = ImmGen(ex_ctrl.sel_imm, ex_reg_inst)
-  val ex_op1 = MuxLookup(ex_ctrl.sel_alu1, SInt(0), Seq(
+  val ex_op1 = MuxLookup(ex_ctrl.sel_alu1, 0.S, Seq(
     A1_RS1 -> ex_rs(0).asSInt,
     A1_PC -> ex_reg_pc.asSInt))
 
   val ex_op2_fused: SInt = 0xFFFFFFFFL.S(xLen.W)
   val ex_op2_normal: SInt = 
     MuxLookup(ex_ctrl.sel_alu2,
-      SInt(0),
+      0.S,
       Seq(
         A2_RS2 -> ex_rs(1).asSInt,
         A2_IMM -> ex_imm,
-        A2_SIZE -> Mux(ex_reg_rvc, SInt(2), SInt(4))
+        A2_SIZE -> Mux(ex_reg_rvc, 2.S, 4.S)
       )
     )
 
@@ -508,8 +509,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val mem_br_target = mem_reg_pc.asSInt +
     Mux(mem_ctrl.branch && mem_br_taken, ImmGen(IMM_SB, mem_reg_inst),
     Mux(mem_ctrl.jal, ImmGen(IMM_UJ, mem_reg_inst),
-    Mux(mem_reg_rvc, SInt(2), SInt(4))))
-  val mem_npc = (Mux(mem_ctrl.jalr || mem_reg_sfence, encodeVirtualAddress(mem_reg_wdata, mem_reg_wdata).asSInt, mem_br_target) & SInt(-2)).asUInt
+    Mux(mem_reg_rvc, 2.S, 4.S)))
+  val mem_npc = (Mux(mem_ctrl.jalr || mem_reg_sfence, encodeVirtualAddress(mem_reg_wdata, mem_reg_wdata).asSInt, mem_br_target) & -2.S).asUInt
   // if the instruction is fusible, ignore npc?
   val mem_wrong_npc =
     Mux(RegNext(RegNext(fusible)),
@@ -1017,7 +1018,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
 }
 
 class RegFile(n: Int, w: Int, zero: Boolean = false) {
-  val rf = Mem(n, UInt(width = w))
+  val rf = Mem(n, UInt(w.W))
   private def access(addr: UInt) = rf(~addr(log2Up(n)-1,0))
   private val reads = ArrayBuffer[(UInt,UInt)]()
   private var canRead = true
@@ -1039,10 +1040,10 @@ class RegFile(n: Int, w: Int, zero: Boolean = false) {
 
 object ImmGen {
   def apply(sel: UInt, inst: UInt) = {
-    val sign = Mux(sel === IMM_Z, SInt(0), inst(31).asSInt)
+    val sign = Mux(sel === IMM_Z, 0.S, inst(31).asSInt)
     val b30_20 = Mux(sel === IMM_U, inst(30,20).asSInt, sign)
     val b19_12 = Mux(sel =/= IMM_U && sel =/= IMM_UJ, sign, inst(19,12).asSInt)
-    val b11 = Mux(sel === IMM_U || sel === IMM_Z, SInt(0),
+    val b11 = Mux(sel === IMM_U || sel === IMM_Z, 0.S,
               Mux(sel === IMM_UJ, inst(20).asSInt,
               Mux(sel === IMM_SB, inst(7).asSInt, sign)))
     val b10_5 = Mux(sel === IMM_U || sel === IMM_Z, Bits(0), inst(30,25))
