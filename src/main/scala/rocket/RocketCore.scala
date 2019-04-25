@@ -246,26 +246,47 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
 
   val id_ctrl = Wire(new IntCtrlSigs()).decode(id_inst(0), decode_table)
 
-  val (fuse_shift, fuse_ld) = canFuse(id_expanded_inst(0), id_expanded_inst(1))
-  val fusible = fuse_shift || fuse_ld
+  val fuse_shift_enable = true 
+  val fuse_ld_enable = true
+  val fuse_add_enable = true
+
+  val (fuse_shift, fuse_ld, fuse_add) = {
+     val (sh, ld, add) = canFuse(id_expanded_inst(0), id_expanded_inst(1))
+
+     val fuse_shift = if (fuse_shift_enable) sh else false.B 
+     val fuse_load = if (fuse_ld_enable) ld else false.B 
+     val fuse_add = if (fuse_add_enable) add else false.B
+
+     (fuse_shift, fuse_load, fuse_add)
+  }
+  val fusible = fuse_shift || fuse_ld || fuse_add
+
+  val id_op2_mask = WireInit(false.B)
+  val id_op1_shamt = WireInit(0.U(2.W))
   
   if (usingMacroFusion) {
     when(fuse_shift) {
       // we should change the result of the decoder
       id_ctrl.alu_fn := ALU.FN_AND 
-      id_ctrl.fuse_clear := true.B
+      id_ctrl.rxs2 := false.B
+      id_op2_mask := true.B
     }  
     .elsewhen (fuse_ld) {
       // do an add then a load
-      //id_ctrl.sel_alu1 := A1_RS1
-      //id_ctrl.sel_alu2 := A1_RS2
       id_ctrl.mem := true.B
       id_ctrl.mem_cmd := M_XRD
+    }
+    .elsewhen (fuse_add) {
+      // shift then add
+      id_op1_shamt := id_inst(0)(21,20)
+      id_ctrl.rxs2 := true.B
+      id_ctrl.sel_alu2 := A2_RS2
+      id_ctrl.alu_fn := ALU.FN_ADD
     }
   }
 
   val id_raddr3 = id_expanded_inst(0).rs3
-  val id_raddr2 = id_expanded_inst(0).rs2
+  val id_raddr2 = Mux(fuse_add, id_expanded_inst(1).rs2, id_expanded_inst(0).rs2)
   val id_raddr1 = id_expanded_inst(0).rs1
   val id_waddr  = id_expanded_inst(0).rd
   val id_load_use = Wire(Bool())
@@ -370,6 +391,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val ex_op1 = MuxLookup(ex_ctrl.sel_alu1, 0.S, Seq(
     A1_RS1 -> ex_rs(0).asSInt,
     A1_PC -> ex_reg_pc.asSInt))
+  val ex_op1_shamt = RegNext(id_op1_shamt)
 
   val ex_op2_fused: SInt = 0xFFFFFFFFL.S(xLen.W)
   val ex_op2_normal: SInt = 
@@ -382,14 +404,15 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
       )
     )
 
-  val ex_op2 = Mux(ex_ctrl.fuse_clear, ex_op2_fused, ex_op2_normal)
+  val ex_op2_mask = RegNext(id_op2_mask)
+  val ex_op2 = Mux(ex_op2_mask, ex_op2_fused, ex_op2_normal)
 
 
   val alu = Module(new ALU)
   alu.io.dw := ex_ctrl.alu_dw
   alu.io.fn := ex_ctrl.alu_fn
   alu.io.in2 := ex_op2.asUInt
-  alu.io.in1 := ex_op1.asUInt
+  alu.io.in1 := ex_op1.asUInt << ex_op1_shamt 
 
   // add a third input to the ALU for macro fusion immediates as necessary
   // alu.io.in3 := 0.U(xLen)
@@ -939,11 +962,12 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     val fuse_i = fusible.asUInt() 
     val fuse_ld_i = fuse_ld.asUInt()
     val fuse_shift_i = fuse_shift.asUInt()
+    val fuse_add_i = fuse_add.asUInt()
 
     val ins_valid = Mux(ibuf.io.inst(0).valid, 1.U, 0.U)
 
     // let's see why the pipeline is stalling
-    printf("fuse: %d, shift: %d, ld: %d, DASM(%x), DASM(%x)\n", fuse_i, fuse_shift_i, fuse_ld_i, id_inst(0), id_inst(1))
+    printf("fuse: %d, shift: %d, ld: %d, add: %d, DASM(%x), DASM(%x)\n", fuse_i, fuse_shift_i, fuse_ld_i, fuse_add_i, id_inst(0), id_inst(1))
   }
 
   PlusArg.timeout(
@@ -993,7 +1017,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     }
   }
 
-  def canFuseChoices(potential_first: List[BitPat], potential_second: List[BitPat]) = (i1: ExpandedInstruction, i2: ExpandedInstruction) => {
+  def canFuseChoices(potential_first: List[BitPat], potential_second: List[BitPat], i1: ExpandedInstruction, i2: ExpandedInstruction)  = {
     val can_fuse_first: Bool = potential_first.map(x => x === i1.bits).reduce((x, y) => x || y)
     val can_fuse_second: Bool = potential_second.map(x => x === i2.bits).reduce((x, y) => x || y)
 
@@ -1003,19 +1027,36 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     fuse_first && fuse_second
   }
 
-  val shifts_left = List(Instructions.SLLI)
-  val shifts_right = List(Instructions.SRLI)
-  val adds = List(Instructions.ADD)
-  val loads = List(Instructions.LD,
-    Instructions.LW, Instructions.LWU,
-    Instructions.LH, Instructions.LHU,
-    Instructions.LB, Instructions.LBU)
+  def canFuseShifts(i1: ExpandedInstruction, i2: ExpandedInstruction) : Bool = {
+    val shifts_left = List(Instructions.SLLI)
+    val shifts_right = List(Instructions.SRLI)
 
-  def canFuseShifts = canFuseChoices(shifts_left, shifts_right)
-  def canFuseAddLoad = canFuseChoices(adds, loads)
+    canFuseChoices(shifts_left, shifts_right, i1, i2)
+  }
+  def canFuseAddLoad(i1: ExpandedInstruction, i2: ExpandedInstruction) : Bool = {
+    val adds = List(Instructions.ADD)
+    val loads = List(Instructions.LD,
+      Instructions.LW, Instructions.LWU,
+      Instructions.LH, Instructions.LHU,
+      Instructions.LB, Instructions.LBU)
+  
+    canFuseChoices(adds, loads, i1, i2)
+  } 
+  def canFuseShiftAdd(i1: ExpandedInstruction, i2: ExpandedInstruction): Bool = {
+    val shifts_left = List(Instructions.SLLI)
+    val adds = List(Instructions.ADD)
+
+    val can_fuse = canFuseChoices(shifts_left, adds, i1, i2)
+
+    // check immediates
+    val imm = i1.bits(24, 20)
+    val immediates = (imm <= 3.U) && (imm >= 1.U)
+
+    can_fuse && immediates
+  }
 
   def canFuse(i1: ExpandedInstruction, i2: ExpandedInstruction) = {
-    (canFuseShifts(i1, i2), canFuseAddLoad(i1, i2))
+    (canFuseShifts(i1, i2), canFuseAddLoad(i1, i2), canFuseShiftAdd(i1, i2))
   }
 }
 
