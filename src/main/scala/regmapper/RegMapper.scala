@@ -157,7 +157,7 @@ object RegMapper
       cover(f_wivalid && f_wiready, fname + "_Reg_write_start", fdesc + " RegField Write Request Initiate")
       cover(f_wovalid && f_woready, fname + "_Reg_write_out",   fdesc + " RegField Write Request Complete")
 
-      def litOR(x: Bool, y: Bool) = if (x.isLit && x.litValue == 1) Bool(true) else x || y
+      def litOR(x: Bool, y: Bool) = if (x.litOption contains 1) Bool(true) else x || y
       // Add this field to the ready-valid signals for the register
       rifire(reg) = (rivalid(i), litOR(f_riready, !rimask)) +: rifire(reg)
       wifire(reg) = (wivalid(i), litOR(f_wiready, !wimask)) +: wifire(reg)

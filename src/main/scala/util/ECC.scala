@@ -42,7 +42,7 @@ class IdentityCode extends Code
 
   def width(w0: Int) = w0
   def encode(x: UInt, poison: Bool = Bool(false)) = {
-    require (poison.isLit && poison.litValue == 0, "IdentityCode can not be poisoned")
+    require (poison.litOption contains 0, "IdentityCode can not be poisoned")
     x
   }
   def swizzle(x: UInt) = x
@@ -123,7 +123,7 @@ class SECCode extends Code
     val n = width(k)
     val (_, _, syndrome) = impl(n, k)
 
-    require ((poison.isLit && poison.litValue == 0) || poisonous(n), s"SEC code of length ${n} cannot be poisoned")
+    require ((poison.litOption contains 0) || poisonous(n), s"SEC code of length ${n} cannot be poisoned")
 
     /* By setting the entire syndrome on poison, the corrected bit falls off the end of the code */
     val syndromeUInt = Vec.tabulate(n-k) { j => (syndrome(j)(k-1, 0) & x).xorR ^ poison }.asUInt

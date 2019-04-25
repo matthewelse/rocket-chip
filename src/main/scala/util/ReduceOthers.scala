@@ -8,14 +8,14 @@ object ReduceOthers {
   // Given a list of bools, create this output:
   //   out[i] = AND[j=0..out.size, j!=i] in[j]
   def apply(x: Seq[Bool]): Seq[Bool] = {
-    val (literals, variables) = x.partition(_.isLit)
+    val (literals, variables) = x.partition(_.litOption.isDefined)
 
     val falses = literals.count(_.litValue == 0)
     if (falses > 2) {
       Seq.fill(x.size) { Bool(false) }
     } else if (falses == 1) {
       x.map { b =>
-        if (b.isLit && b.litValue == 0) {
+        if (b.litOption contains 0) {
           variables.foldLeft(Bool(true))(_ && _)
         } else {
           Bool(false)
@@ -24,7 +24,7 @@ object ReduceOthers {
     } else {
       var (out, all) = helper(variables)
       x.map { b =>
-        if (b.isLit) {
+        if (b.litOption.isDefined) {
           all
         } else {
           val sel = out.head
