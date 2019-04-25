@@ -23,7 +23,7 @@ case class RocketCoreParams(
   useAtomicsOnlyForIO: Boolean = false,
   useCompressed: Boolean = true,
   useSCIE: Boolean = false,
-  useMacroFusion: Boolean = true,
+  useMacroFusion: Boolean = false,
   nLocalInterrupts: Int = 0,
   nBreakpoints: Int = 1,
   nPMPs: Int = 8,
@@ -251,7 +251,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val fuse_add_enable = true
 
   val (fuse_shift, fuse_ld, fuse_add) = {
-     val (sh, ld, add) = canFuse(id_expanded_inst(0), id_expanded_inst(1))
+     val (sh, ld, add) = if (usingMacroFusion) canFuse(id_expanded_inst(0), id_expanded_inst(1)) else (false.B, false.B, false.B)
 
      val fuse_shift = if (fuse_shift_enable) sh else false.B 
      val fuse_load = if (fuse_ld_enable) ld else false.B 
@@ -286,7 +286,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   }
 
   val id_raddr3 = id_expanded_inst(0).rs3
-  val id_raddr2 = Mux(fuse_add, id_expanded_inst(1).rs2, id_expanded_inst(0).rs2)
+  val id_raddr2 = if (usingMacroFusion) Mux(fuse_add, id_expanded_inst(1).rs2, id_expanded_inst(0).rs2) else id_expanded_inst(0).rs2
   val id_raddr1 = id_expanded_inst(0).rs1
   val id_waddr  = id_expanded_inst(0).rd
   val id_load_use = Wire(Bool())
@@ -480,7 +480,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     ex_reg_flush_pipe := id_ctrl.fence_i || id_csr_flush
     ex_reg_load_use := id_load_use
     // TODO (me390): this fetches the load width from the instruction. if we're fusing, we have to get this from id_inst(1)
-    ex_reg_mem_size := Mux(fuse_ld, id_inst(1)(13, 12), id_inst(0)(13, 12))
+    ex_reg_mem_size := (if (usingMacroFusion) Mux(fuse_ld, id_inst(1)(13, 12), id_inst(0)(13, 12)) else id_inst(0)(13, 12))
     when (id_ctrl.mem_cmd.isOneOf(M_SFENCE, M_FLUSH_ALL)) {
       ex_reg_mem_size := Cat(id_raddr2 =/= 0.U, id_raddr1 =/= 0.U)
     }
@@ -708,7 +708,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   csr.io.cause := wb_cause
   csr.io.retire := wb_valid
   csr.io.inst(0) := (if (usingCompressed) Cat(Mux(wb_reg_raw_inst(1, 0).andR, wb_reg_inst >> 16, 0.U), wb_reg_raw_inst(15, 0)) else wb_reg_inst)
-  csr.io.inst(1) := DontCare
+  if (usingMacroFusion)
+    csr.io.inst(1) := DontCare
   csr.io.interrupts := io.interrupts
   csr.io.hartid := io.hartid
   io.fpu.fcsr_rm := csr.io.fcsr_rm
@@ -825,13 +826,10 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   io.imem.sfence.bits.asid := wb_reg_rs2
   io.ptw.sfence := io.imem.sfence
 
-  val fuseCount = RegInit(UInt(32.W), 0.U)
-  fuseCount := fuseCount + Mux(fusible, 1.U, 0.U)
-  val actualFusionCount = RegInit(UInt(32.W), 0.U)
-  actualFusionCount := actualFusionCount + Mux(ibuf.io.inst(1).ready, 1.U, 0.U)
-
   ibuf.io.inst(0).ready := !ctrl_stalld
-  ibuf.io.inst(1).ready := !ctrl_stalld && fusible 
+
+  if (usingMacroFusion)
+    ibuf.io.inst(1).ready := !ctrl_stalld && fusible 
 
   io.imem.btb_update.valid := mem_reg_valid && !take_pc_wb && mem_wrong_npc && (!mem_cfi || mem_cfi_taken)
   io.imem.btb_update.bits.isValid := mem_cfi
@@ -959,15 +957,16 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
          coreMonitorBundle.rd1src, coreMonitorBundle.rd1val,
          coreMonitorBundle.inst, coreMonitorBundle.inst)
     
-    val fuse_i = fusible.asUInt() 
-    val fuse_ld_i = fuse_ld.asUInt()
-    val fuse_shift_i = fuse_shift.asUInt()
-    val fuse_add_i = fuse_add.asUInt()
+    if (usingMacroFusion) {
+      val fuse_i = fusible.asUInt() 
+      val fuse_ld_i = fuse_ld.asUInt()
+      val fuse_shift_i = fuse_shift.asUInt()
+      val fuse_add_i = fuse_add.asUInt()
 
-    val ins_valid = Mux(ibuf.io.inst(0).valid, 1.U, 0.U)
+      val ins_valid = Mux(ibuf.io.inst(0).valid, 1.U, 0.U)
 
-    // let's see why the pipeline is stalling
-    printf("fuse: %d, shift: %d, ld: %d, add: %d, DASM(%x), DASM(%x)\n", fuse_i, fuse_shift_i, fuse_ld_i, fuse_add_i, id_inst(0), id_inst(1))
+      printf("fuse: %d, shift: %d, ld: %d, add: %d, DASM(%x), DASM(%x)\n", fuse_i, fuse_shift_i, fuse_ld_i, fuse_add_i, id_inst(0), id_inst(1))
+    }
   }
 
   PlusArg.timeout(

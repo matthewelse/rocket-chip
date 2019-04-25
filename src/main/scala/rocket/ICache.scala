@@ -28,8 +28,7 @@ case class ICacheParams(
     prefetch: Boolean = false,
     blockBytes: Int = 64,
     latency: Int = 2,
-    // this should be 4 if you disable fusion
-    fetchBytes: Int = 8) extends L1CacheParams {
+    fetchBytes: Int = 4) extends L1CacheParams {
   def tagCode: Code = Code.fromString(tagECC)
   def dataCode: Code = Code.fromString(dataECC)
   def replacement = new RandomReplacement(nWays)

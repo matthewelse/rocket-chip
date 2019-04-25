@@ -46,28 +46,32 @@ class BaseSubsystemConfig extends Config ((site, here, up) => {
 
 /* Composable partial function Configs to set individual parameters */
 
-class WithNBigCores(n: Int) extends Config((site, here, up) => {
+class WithNBigCores(n: Int, enableFusion: Boolean = false) extends Config((site, here, up) => {
   case RocketTilesKey => {
     val big = RocketTileParams(
       core   = RocketCoreParams(mulDiv = Some(MulDivParams(
         mulUnroll = 8,
         mulEarlyOut = true,
-        divEarlyOut = true))),
+        divEarlyOut = true)),
+      useMacroFusion = enableFusion
+    ),
       dcache = Some(DCacheParams(
         rowBits = site(SystemBusKey).beatBits,
         nMSHRs = 0,
         blockBytes = site(CacheBlockBytes))),
       icache = Some(ICacheParams(
         rowBits = site(SystemBusKey).beatBits,
-        blockBytes = site(CacheBlockBytes))))
+        blockBytes = site(CacheBlockBytes),
+        fetchBytes = if (enableFusion) 8 else 4)),
+    )
     List.tabulate(n)(i => big.copy(hartId = i))
   }
 })
 
-class WithNSmallCores(n: Int) extends Config((site, here, up) => {
+class WithNSmallCores(n: Int, enableFusion: Boolean = false) extends Config((site, here, up) => {
   case RocketTilesKey => {
     val small = RocketTileParams(
-      core = RocketCoreParams(useVM = false, fpu = None),
+      core = RocketCoreParams(useVM = false, fpu = None, useMacroFusion = enableFusion),
       btb = None,
       dcache = Some(DCacheParams(
         rowBits = site(SystemBusKey).beatBits,
@@ -81,7 +85,9 @@ class WithNSmallCores(n: Int) extends Config((site, here, up) => {
         nSets = 64,
         nWays = 1,
         nTLBEntries = 4,
-        blockBytes = site(CacheBlockBytes))))
+        blockBytes = site(CacheBlockBytes),
+        fetchBytes = if (enableFusion) 8 else 4
+        )))
     List.tabulate(n)(i => small.copy(hartId = i))
   }
 })

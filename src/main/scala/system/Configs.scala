@@ -23,10 +23,13 @@ class BaseConfig extends Config(
 
 class DefaultConfig extends Config(new WithNBigCores(1) ++ new BaseConfig)
 
+class DefaultConfigWithFusion extends Config(new WithNBigCores(1, enableFusion=true) ++ new BaseConfig)
+
 class DefaultBufferlessConfig extends Config(
   new WithBufferlessBroadcastHub ++ new WithNBigCores(1) ++ new BaseConfig)
 
 class DefaultSmallConfig extends Config(new WithNSmallCores(1) ++ new BaseConfig)
+class DefaultSmallConfigWithFusion extends Config(new WithNSmallCores(1, enableFusion=true) ++ new BaseConfig)
 class DefaultRV32Config extends Config(new WithRV32 ++ new DefaultConfig)
 
 class DualBankConfig extends Config(
@@ -55,6 +58,7 @@ class EightChannelConfig extends Config(new WithNMemoryChannels(8) ++ new BaseCo
 class DualCoreConfig extends Config(
   new WithNBigCores(2) ++ new BaseConfig)
 
+// RV32 only
 class TinyConfig extends Config(
   new WithNoMemPort ++
   new WithNMemoryChannels(0) ++
