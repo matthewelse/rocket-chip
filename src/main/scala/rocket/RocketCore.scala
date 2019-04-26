@@ -247,8 +247,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val id_ctrl = Wire(new IntCtrlSigs()).decode(id_inst(0), decode_table)
 
   val fuse_shift_enable = true 
-  val fuse_ld_enable = true
-  val fuse_add_enable = true
+  val fuse_ld_enable = false
+  val fuse_add_enable = false
 
   val (fuse_shift, fuse_ld, fuse_add) = {
      val (sh, ld, add) = if (usingMacroFusion) canFuse(id_expanded_inst(0), id_expanded_inst(1)) else (false.B, false.B, false.B)
@@ -262,6 +262,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val fusible = fuse_shift || fuse_ld || fuse_add
 
   val id_op2_mask = WireInit(false.B)
+  val id_op2_mask_shamt = WireInit(0.U(2.W))
   val id_op1_shamt = WireInit(0.U(2.W))
   
   if (usingMacroFusion) {
@@ -270,6 +271,9 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
       id_ctrl.alu_fn := ALU.FN_AND 
       id_ctrl.rxs2 := false.B
       id_op2_mask := true.B
+
+      // this might need optimising - hopefully this isn't synthesised as subtract, it's only four potential values.
+      id_op2_mask_shamt := 32.U - id_inst(1)(24, 20)
     }  
     .elsewhen (fuse_ld) {
       // do an add then a load
@@ -297,6 +301,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val id_rs = id_raddr.map(rf.read _)
   val ctrl_killd = Wire(Bool())
   val id_npc = (ibuf.io.pc.asSInt + ImmGen(IMM_UJ, id_inst(0))).asUInt
+
+  printf("id_raddr -> 1: %d, 2: %d    ", id_raddr(0), id_raddr(1))
 
   val csr = Module(new CSRFile(perfEvents, coreParams.customCSRs.decls))
   val id_csr_en = id_ctrl.csr.isOneOf(CSR.S, CSR.C, CSR.W)
@@ -392,8 +398,9 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     A1_RS1 -> ex_rs(0).asSInt,
     A1_PC -> ex_reg_pc.asSInt))
   val ex_op1_shamt = RegNext(id_op1_shamt)
+  val ex_op2_mask_shamt = RegNext(id_op2_mask_shamt)
 
-  val ex_op2_fused: SInt = 0xFFFFFFFFL.S(xLen.W)
+  val ex_op2_fused: SInt = ((0xFFFFFFFFL.S(xLen.W) << ex_op2_mask_shamt) & 0xFFFFFFFFL.S(xLen.W))
   val ex_op2_normal: SInt = 
     MuxLookup(ex_ctrl.sel_alu2,
       0.S,
@@ -916,9 +923,9 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   coreMonitorBundle.wrdst := Mux(rf_wen && !(wb_set_sboard && wb_wen), rf_waddr, 0.U)
   coreMonitorBundle.wrdata := rf_wdata
   coreMonitorBundle.wren := rf_wen
-  coreMonitorBundle.rd0src := wb_reg_inst(19,15)
+  coreMonitorBundle.rd0src := RegNext(RegNext(RegNext(id_raddr(0))))
   coreMonitorBundle.rd0val := RegNext(RegNext(ex_rs(0)))
-  coreMonitorBundle.rd1src := wb_reg_inst(24,20)
+  coreMonitorBundle.rd1src := RegNext(RegNext(RegNext(id_raddr(1))))
   coreMonitorBundle.rd1val := RegNext(RegNext(ex_rs(1)))
   coreMonitorBundle.inst := csr.io.trace(0).insn
 
@@ -1030,7 +1037,11 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     val shifts_left = List(Instructions.SLLI)
     val shifts_right = List(Instructions.SRLI)
 
-    canFuseChoices(shifts_left, shifts_right, i1, i2)
+    // check immediates
+    val first_imm = i1.bits(24, 20) === 32.U
+    val second_imm = (i2.bits(24, 20) <= 32.U) && (i2.bits(24, 20) >= 29.U)
+
+    canFuseChoices(shifts_left, shifts_right, i1, i2) && first_imm && second_imm
   }
   def canFuseAddLoad(i1: ExpandedInstruction, i2: ExpandedInstruction) : Bool = {
     val adds = List(Instructions.ADD)
