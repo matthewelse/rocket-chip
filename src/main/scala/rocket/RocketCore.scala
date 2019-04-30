@@ -1044,7 +1044,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     canFuseChoices(shifts_left, shifts_right, i1, i2) && first_imm && second_imm
   }
   def canFuseAddLoad(i1: ExpandedInstruction, i2: ExpandedInstruction) : Bool = {
-    val adds = List(Instructions.ADD)
+    // think we can fuse addi for free
+    val adds = List(Instructions.ADD, Instructions.ADDI)
     val loads = List(Instructions.LD,
       Instructions.LW, Instructions.LWU,
       Instructions.LH, Instructions.LHU,
