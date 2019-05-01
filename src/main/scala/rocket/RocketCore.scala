@@ -247,8 +247,8 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val id_ctrl = Wire(new IntCtrlSigs()).decode(id_inst(0), decode_table)
 
   val fuse_shift_enable = true 
-  val fuse_ld_enable = false
-  val fuse_add_enable = false
+  val fuse_ld_enable = true 
+  val fuse_add_enable = true 
 
   val (fuse_shift, fuse_ld, fuse_add) = {
      val (sh, ld, add) = if (usingMacroFusion) canFuse(id_expanded_inst(0), id_expanded_inst(1)) else (false.B, false.B, false.B)
