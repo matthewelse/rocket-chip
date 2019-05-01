@@ -250,14 +250,15 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val fuse_ld_enable = true 
   val fuse_add_enable = true 
 
-  val (fuse_shift, fuse_ld, fuse_add) = {
-     val (sh, ld, add) = if (usingMacroFusion) canFuse(id_expanded_inst(0), id_expanded_inst(1)) else (false.B, false.B, false.B)
+  val (fuse_shift, fuse_ld, fuse_add, fuse_ldi) = {
+     val (sh, ld, add, ld_i) = if (usingMacroFusion) canFuse(id_expanded_inst(0), id_expanded_inst(1)) else (false.B, false.B, false.B, false.B)
 
      val fuse_shift = if (fuse_shift_enable) sh else false.B 
      val fuse_load = if (fuse_ld_enable) ld else false.B 
      val fuse_add = if (fuse_add_enable) add else false.B
+     val fuse_loadi = /*if (fuse_ld_enable) ld_i else*/ false.B
 
-     (fuse_shift, fuse_load, fuse_add)
+     (fuse_shift, fuse_load, fuse_add, fuse_loadi)
   }
   val fusible = fuse_shift || fuse_ld || fuse_add
 
@@ -1045,14 +1046,32 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   }
   def canFuseAddLoad(i1: ExpandedInstruction, i2: ExpandedInstruction) : Bool = {
     // think we can fuse addi for free
-    val adds = List(Instructions.ADD, Instructions.ADDI)
+    val adds = List(Instructions.ADD)
     val loads = List(Instructions.LD,
       Instructions.LW, Instructions.LWU,
       Instructions.LH, Instructions.LHU,
       Instructions.LB, Instructions.LBU)
   
-    canFuseChoices(adds, loads, i1, i2)
+    val can_fuse = canFuseChoices(adds, loads, i1, i2)
+    val load_imm = ImmGen(IMM_I, i2.bits)
+    val immediates = load_imm === 0.S
+
+    can_fuse && immediates
   } 
+  def canFuseAddiLoad(i1: ExpandedInstruction, i2: ExpandedInstruction) : Bool = {
+    // think we can fuse addi for free
+    val adds = List(Instructions.ADDI)
+    val loads = List(Instructions.LD,
+      Instructions.LW, Instructions.LWU,
+      Instructions.LH, Instructions.LHU,
+      Instructions.LB, Instructions.LBU)
+
+    val can_fuse = canFuseChoices(adds, loads, i1, i2)
+    val load_imm = ImmGen(IMM_I, i2.bits)
+    val immediates = load_imm === 0.S
+  
+    can_fuse && immediates
+  }
   def canFuseShiftAdd(i1: ExpandedInstruction, i2: ExpandedInstruction): Bool = {
     val shifts_left = List(Instructions.SLLI)
     val adds = List(Instructions.ADD)
@@ -1067,7 +1086,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   }
 
   def canFuse(i1: ExpandedInstruction, i2: ExpandedInstruction) = {
-    (canFuseShifts(i1, i2), canFuseAddLoad(i1, i2), canFuseShiftAdd(i1, i2))
+    (canFuseShifts(i1, i2), canFuseAddLoad(i1, i2), canFuseShiftAdd(i1, i2), canFuseAddiLoad(i1, i2))
   }
 }
 
