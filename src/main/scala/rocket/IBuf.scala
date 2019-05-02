@@ -38,21 +38,20 @@ class IBuf(implicit p: Parameters) extends CoreModule {
 
   val pcWordBits = io.imem.bits.pc.extract(log2Ceil(fetchWidth*coreInstBytes)-1, log2Ceil(coreInstBytes))
   val nReady = Wire(init = UInt(0, log2Ceil(fetchWidth+1)))
-  val nTake = nReady
   val nIC = Mux(io.imem.bits.btb.taken, io.imem.bits.btb.bridx +& 1, UInt(fetchWidth)) - pcWordBits
   val nICReady = nReady - nBufValid
   val nValid = Mux(io.imem.valid, nIC, UInt(0)) + nBufValid
-  io.imem.ready := io.inst(0).ready && nTake >= nBufValid && (nICReady >= nIC || n >= nIC - nICReady)
+  io.imem.ready := io.inst(0).ready && nReady >= nBufValid && (nICReady >= nIC || n >= nIC - nICReady)
 
   if (n > 0) {
     when (io.inst(0).ready) {
-      nBufValid := Mux(nTake >= nBufValid, UInt(0), nBufValid - nTake)
-      if (n > 1) when (nTake > 0 && nTake < nBufValid) {
-        val shiftedBuf = shiftInsnRight(buf.data(n*coreInstBits-1, coreInstBits), (nTake-1)(log2Ceil(n-1)-1,0))
+      nBufValid := Mux(nReady >= nBufValid, UInt(0), nBufValid - nReady)
+      if (n > 1) when (nReady > 0 && nReady < nBufValid) {
+        val shiftedBuf = shiftInsnRight(buf.data(n*coreInstBits-1, coreInstBits), (nReady-1)(log2Ceil(n-1)-1,0))
         buf.data := Cat(buf.data(n*coreInstBits-1, (n-1)*coreInstBits), shiftedBuf((n-1)*coreInstBits-1, 0))
-        buf.pc := buf.pc & ~pcWordMask | (buf.pc + (nTake << log2Ceil(coreInstBytes))) & pcWordMask
+        buf.pc := buf.pc & ~pcWordMask | (buf.pc + (nReady << log2Ceil(coreInstBytes))) & pcWordMask
       }
-      when (io.imem.valid && nTake >= nBufValid && nICReady < nIC && n >= nIC - nICReady) {
+      when (io.imem.valid && nReady >= nBufValid && nICReady < nIC && n >= nIC - nICReady) {
         val shamt = pcWordBits + nICReady
         nBufValid := nIC - nICReady
         buf := io.imem.bits
