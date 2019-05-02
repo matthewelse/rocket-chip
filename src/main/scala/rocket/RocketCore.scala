@@ -248,6 +248,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
 
   val fuse_shift_enable = true 
   val fuse_ld_enable = true 
+  val fuse_ldi_enable = true
   val fuse_add_enable = true 
 
   val (fuse_shift, fuse_ld, fuse_add, fuse_ldi) = {
@@ -256,11 +257,11 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
      val fuse_shift = if (fuse_shift_enable) sh else false.B 
      val fuse_load = if (fuse_ld_enable) ld else false.B 
      val fuse_add = if (fuse_add_enable) add else false.B
-     val fuse_loadi = /*if (fuse_ld_enable) ld_i else*/ false.B
+     val fuse_loadi = if (fuse_ldi_enable) ld_i else false.B
 
      (fuse_shift, fuse_load, fuse_add, fuse_loadi)
   }
-  val fusible = fuse_shift || fuse_ld || fuse_add
+  val id_fusible = fuse_shift || fuse_ld || fuse_add || fuse_ldi
 
   val id_op2_mask = WireInit(false.B)
   val id_op2_mask_shamt = WireInit(0.U(2.W))
@@ -302,8 +303,6 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val id_rs = id_raddr.map(rf.read _)
   val ctrl_killd = Wire(Bool())
   val id_npc = (ibuf.io.pc.asSInt + ImmGen(IMM_UJ, id_inst(0))).asUInt
-
-  printf("id_raddr -> 1: %d, 2: %d    ", id_raddr(0), id_raddr(1))
 
   val csr = Module(new CSRFile(perfEvents, coreParams.customCSRs.decls))
   val id_csr_en = id_ctrl.csr.isOneOf(CSR.S, CSR.C, CSR.W)
@@ -422,9 +421,6 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   alu.io.in2 := ex_op2.asUInt
   alu.io.in1 := ex_op1.asUInt << ex_op1_shamt 
 
-  // add a third input to the ALU for macro fusion immediates as necessary
-  // alu.io.in3 := 0.U(xLen)
-
   val ex_scie_unpipelined_wdata = if (!rocketParams.useSCIE) 0.U else {
     val u = Module(new SCIEUnpipelined(xLen))
     u.io.insn := ex_reg_inst
@@ -488,7 +484,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     ex_reg_flush_pipe := id_ctrl.fence_i || id_csr_flush
     ex_reg_load_use := id_load_use
     // TODO (me390): this fetches the load width from the instruction. if we're fusing, we have to get this from id_inst(1)
-    ex_reg_mem_size := (if (usingMacroFusion) Mux(fuse_ld, id_inst(1)(13, 12), id_inst(0)(13, 12)) else id_inst(0)(13, 12))
+    ex_reg_mem_size := (if (usingMacroFusion) Mux(fuse_ld || fuse_ldi, id_inst(1)(13, 12), id_inst(0)(13, 12)) else id_inst(0)(13, 12))
     when (id_ctrl.mem_cmd.isOneOf(M_SFENCE, M_FLUSH_ALL)) {
       ex_reg_mem_size := Cat(id_raddr2 =/= 0.U, id_raddr1 =/= 0.U)
     }
@@ -545,7 +541,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val mem_npc = (Mux(mem_ctrl.jalr || mem_reg_sfence, encodeVirtualAddress(mem_reg_wdata, mem_reg_wdata).asSInt, mem_br_target) & -2.S).asUInt
   // if the instruction is fusible, ignore npc?
   val mem_wrong_npc =
-    Mux(RegNext(RegNext(fusible)),
+    Mux(RegNext(RegNext(id_fusible)),
     false.B,
     Mux(ex_pc_valid, mem_npc =/= ex_reg_pc,
     Mux(ibuf.io.inst(0).valid || ibuf.io.imem.valid, mem_npc =/= ibuf.io.pc, true.B)))
@@ -837,7 +833,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   ibuf.io.inst(0).ready := !ctrl_stalld
 
   if (usingMacroFusion)
-    ibuf.io.inst(1).ready := !ctrl_stalld && fusible 
+    ibuf.io.inst(1).ready := !ctrl_stalld && id_fusible 
 
   io.imem.btb_update.valid := mem_reg_valid && !take_pc_wb && mem_wrong_npc && (!mem_cfi || mem_cfi_taken)
   io.imem.btb_update.bits.isValid := mem_cfi
@@ -966,7 +962,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
          coreMonitorBundle.inst, coreMonitorBundle.inst)
     
     if (usingMacroFusion) {
-      val fuse_i = fusible.asUInt() 
+      val fuse_i = id_fusible.asUInt() 
       val fuse_ld_i = fuse_ld.asUInt()
       val fuse_shift_i = fuse_shift.asUInt()
       val fuse_add_i = fuse_add.asUInt()
