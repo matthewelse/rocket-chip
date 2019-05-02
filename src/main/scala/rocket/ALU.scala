@@ -51,7 +51,6 @@ class ALU(implicit p: Parameters) extends CoreModule()(p) {
   val io = new Bundle {
     val dw = Bits(INPUT, SZ_DW)
     val fn = Bits(INPUT, SZ_ALU_FN)
-    // val in3 = UInt(INPUT, xLen) // TODO: does this need to be the whole size?
     val in2 = UInt(INPUT, xLen)
     val in1 = UInt(INPUT, xLen)
     val out = UInt(OUTPUT, xLen)
