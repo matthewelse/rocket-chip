@@ -58,7 +58,6 @@ class EightChannelConfig extends Config(new WithNMemoryChannels(8) ++ new BaseCo
 class DualCoreConfig extends Config(
   new WithNBigCores(2) ++ new BaseConfig)
 
-// RV32 only
 class TinyConfig extends Config(
   new WithNoMemPort ++
   new WithNMemoryChannels(0) ++
